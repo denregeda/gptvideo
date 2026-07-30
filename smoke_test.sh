@@ -44,6 +44,11 @@ if $DC curl -sf "$API/health" >/dev/null 2>&1; then ok "/health отвечает
 
 # ── 3. Вход ──────────────────────────────────────────────────────────────────
 step "Аутентификация"
+BACKUP_ANON_HTTP=$($DC curl -s -o /dev/null -w '%{http_code}' "$API/backups/1/download" 2>/dev/null)
+[ "$BACKUP_ANON_HTTP" = "401" ] \
+  && ok "скачивание бэкапа без входа запрещено" \
+  || bad "бэкап доступен без входа: HTTP $BACKUP_ANON_HTTP"
+
 TOKEN=$($DC curl -s -X POST "$API/token" -d "username=$ADMIN_USER&password=$ADMIN_PASS" \
         -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null \
         | python3 -c "import sys,json;print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
@@ -103,6 +108,7 @@ req GET "/system/selfcheck";       [ "$HTTP" = "200" ] && ok "самодиагн
 req GET "/media/fillers";          [ "$HTTP" = "200" ] && ok "папка заглушек" || bad "заглушки: HTTP $HTTP"
 req GET "/media/common";           [ "$HTTP" = "200" ] && ok "общая медиатека" || bad "общая медиатека: HTTP $HTTP"
 req GET "/media/folders-all";      [ "$HTTP" = "200" ] && ok "список папок" || bad "папки: HTTP $HTTP"
+req GET "/backups";                [ "$HTTP" = "200" ] && ok "бэкапы доступны администратору" || bad "бэкапы: HTTP $HTTP"
 req GET "/reports/fillers";        [ "$HTTP" = "200" ] && ok "отчёт по заглушкам" || bad "отчёт заглушек: HTTP $HTTP"
 [ -n "${SID:-}" ] && { req GET "/minipc/$SID/diagnostics"; [ "$HTTP" = "200" ] && ok "диагностика экрана (список)" || bad "диагностика: HTTP $HTTP"; }
 

@@ -246,3 +246,16 @@ def require_superadmin(current_admin: dict = Depends(get_current_admin)):
     if current_admin.get("role") != "superadmin":
         raise HTTPException(status_code=403, detail="Доступно только супер-админу")
     return current_admin
+
+
+def require_backup_admin(current_admin: dict = Depends(get_current_admin)):
+    """Доступ к полному дампу БД — только admin/superadmin.
+
+    Бэкап содержит данные всех рекламодателей, пользователей и кампаний.
+    Поэтому обычного права чтения (auditor/moderator) или общего
+    ``require_write`` здесь недостаточно: разрешён только явный белый список.
+    """
+    role = str(current_admin.get("role", "")).lower()
+    if role not in {"admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Доступ к бэкапам только для администратора")
+    return current_admin
