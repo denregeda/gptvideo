@@ -117,6 +117,11 @@ async function viewSettings(){
               data-username="${esc(u.username)}">Сброс пароля</button>
 
               <button class="btn" style="padding:4px 8px;font-size:12px;"
+              data-action="settings-revoke-sessions"
+              data-user-id="${u.id}"
+              data-username="${esc(u.username)}">Завершить сессии</button>
+
+              <button class="btn" style="padding:4px 8px;font-size:12px;"
               data-action="settings-toggle-block"
               data-user-id="${u.id}"
               data-block-value="${blocked ? 'false' : 'true'}">${blocked ? 'Разблокировать' : 'Заблокировать'}</button>
@@ -319,6 +324,12 @@ function initSettingsViewActions(){
         return resetPass(id, username);
       }
 
+      case 'settings-revoke-sessions': {
+        const id = Number(el.dataset.userId);
+        const username = el.dataset.username || '';
+        return revokeSessions(id, username);
+      }
+
       case 'settings-toggle-block': {
         const id = Number(el.dataset.userId);
         const block = el.dataset.blockValue === 'true';
@@ -451,11 +462,12 @@ async function saveMyPassword(){
   }
 
   try{
-    await api('/me/password', {
+    const data = await api('/me/password', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
       body:JSON.stringify({ old_password: oldp, new_password: newp })
     });
+    setAuthToken(data.access_token);
     toast('Пароль изменён');
     document.getElementById('mypass').innerHTML = '';
   }catch(e){
@@ -535,6 +547,16 @@ async function resetPass(id, name){
       body:JSON.stringify({ new_password: np })
     });
     toast('Пароль сброшен');
+  }catch(e){
+    toast('Ошибка: ' + e.message);
+  }
+}
+
+async function revokeSessions(id, name){
+  if(!confirm('Завершить все активные сессии пользователя «' + name + '»?')) return;
+  try{
+    await api('/users/' + id + '/revoke-sessions', { method:'POST' });
+    toast('Все сессии пользователя завершены');
   }catch(e){
     toast('Ошибка: ' + e.message);
   }

@@ -59,6 +59,41 @@ if [ -n "$TOKEN" ]; then ok "вход $ADMIN_USER — токен получен"
   echo '  read -rsp "Пароль admin: " ADMIN_PASS; echo; ADMIN_PASS="$ADMIN_PASS" bash smoke_test.sh; unset ADMIN_PASS'
   exit $((FAIL))
 fi
+TOKEN_SV=$(printf '%s' "$TOKEN" | python3 -c "
+import base64,json,sys
+part=sys.stdin.read().split('.')[1]
+part += '=' * (-len(part) % 4)
+print(json.loads(base64.urlsafe_b64decode(part)).get('sv',''))
+" 2>/dev/null)
+[ -n "$TOKEN_SV" ] && ok "JWT содержит поколение отзыва сессии" \
+                     || bad "JWT не содержит session_version"
+
+# Живой Redis rate limit на заведомо несуществующей тестовой учётке. Адрес
+# зарезервирован для документации, ключи и запись аудита удаляются сразу.
+AUTH_PROBE="SMOKE_auth_$(date +%s)"
+AUTH_PROBE_IP="198.51.100.77"
+AUTH_LIMIT=$($DC sh -c 'printf %s "${AUTH_ACCOUNT_FAILURE_LIMIT:-5}"')
+AUTH_CODES=""
+for _ in $(seq 1 "$AUTH_LIMIT"); do
+  AUTH_CODE=$($DC curl -s -o /dev/null -w '%{http_code}' -X POST "$API/token" \
+    -H "X-Real-IP: $AUTH_PROBE_IP" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=$AUTH_PROBE&password=wrong-password" 2>/dev/null)
+  AUTH_CODES="$AUTH_CODES $AUTH_CODE"
+done
+AUTH_KEYS=$($DC python -c "from auth_security import login_limiter; print(' '.join(login_limiter.keys_for('$AUTH_PROBE','$AUTH_PROBE_IP')))" 2>/dev/null)
+[ -n "$AUTH_KEYS" ] && docker exec ds_redis redis-cli DEL $AUTH_KEYS >/dev/null 2>&1
+PG_USER=$(docker exec ds_postgres printenv POSTGRES_USER 2>/dev/null)
+PG_DB=$(docker exec ds_postgres printenv POSTGRES_DB 2>/dev/null)
+docker exec ds_postgres psql -U "$PG_USER" -d "$PG_DB" -q \
+  -c "DELETE FROM audit_log WHERE detail LIKE 'логин=$AUTH_PROBE;%';" >/dev/null 2>&1
+AUTH_LAST="${AUTH_CODES##* }"
+AUTH_PREV="${AUTH_CODES% *}"
+if [ "$AUTH_LAST" = "429" ] && ! printf '%s' "$AUTH_PREV" | grep -qvE '^( 401)+$'; then
+  ok "Redis ограничивает перебор входа (HTTP 429)"
+else
+  bad "rate limit входа не сработал: HTTP$AUTH_CODES"
+fi
 
 # ── 4. Полный цикл: экран → медиа → плейлист → расписание ────────────────────
 step "Основной цикл эфира"
@@ -104,7 +139,11 @@ req GET "/billing/invoices";       [ "$HTTP" = "200" ] && ok "биллинг" ||
 req GET "/campaigns";              [ "$HTTP" = "200" ] && ok "кампании" || bad "кампании: HTTP $HTTP"
 req GET "/moderation/pending";     [ "$HTTP" = "200" ] && ok "модерация" || bad "модерация: HTTP $HTTP"
 req GET "/notifications/settings"; [ "$HTTP" = "200" ] && ok "настройки уведомлений" || bad "уведомления: HTTP $HTTP"
-req GET "/system/selfcheck";       [ "$HTTP" = "200" ] && ok "самодиагностика" || bad "самодиагностика: HTTP $HTTP"
+req GET "/system/selfcheck"
+SELF_AUTH_OK=$(echo "$BODY" | python3 -c "import sys,json;c=json.load(sys.stdin).get('checks',[]);print('1' if any(x.get('id')=='auth_security' and x.get('status')=='ok' for x in c) else '')" 2>/dev/null)
+[ "$HTTP" = "200" ] && [ "$SELF_AUTH_OK" = "1" ] \
+  && ok "самодиагностика: защита входа и сессий" \
+  || bad "самодиагностика авторизации: HTTP $HTTP"
 req GET "/media/fillers";          [ "$HTTP" = "200" ] && ok "папка заглушек" || bad "заглушки: HTTP $HTTP"
 req GET "/media/common";           [ "$HTTP" = "200" ] && ok "общая медиатека" || bad "общая медиатека: HTTP $HTTP"
 req GET "/media/folders-all";      [ "$HTTP" = "200" ] && ok "список папок" || bad "папки: HTTP $HTTP"

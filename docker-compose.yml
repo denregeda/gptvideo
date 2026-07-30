@@ -42,6 +42,7 @@ services:
       - ./server/migrations/030_gov_owners.sql:/docker-entrypoint-initdb.d/30_gov_owners.sql:ro
       - ./server/migrations/031_campaign_pricing.sql:/docker-entrypoint-initdb.d/31_campaign_pricing.sql:ro
       - ./server/migrations/032_advertiser_folders.sql:/docker-entrypoint-initdb.d/32_advertiser_folders.sql:ro
+      - ./server/migrations/033_auth_session_security.sql:/docker-entrypoint-initdb.d/33_auth_session_security.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s

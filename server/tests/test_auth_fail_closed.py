@@ -59,13 +59,15 @@ class _IdentityDB:
         return False
 
 
-def _user(role="admin", active=True, blocked=False, advertiser_id=None):
+def _user(role="admin", active=True, blocked=False, advertiser_id=None,
+          session_version=1):
     return {
         "username": "existing-user",
         "role": role,
         "is_active": active,
         "is_blocked": blocked,
         "advertiser_id": advertiser_id,
+        "session_version": session_version,
     }
 
 

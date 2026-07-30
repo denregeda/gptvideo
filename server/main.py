@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from jose import JWTError, jwt as jose_jwt
 
 from auth_identity import IdentityStoreUnavailable, fetch_user_identity, identity_denial
+from auth_security import session_version_matches
 from deps import (ALGORITHM, ADVERTISER_ROLE, SECRET_KEY, SessionLocal,
                   is_path_allowed_for_advertiser)
 
@@ -41,8 +42,10 @@ async def advertiser_guard(request: Request, call_next):
     auth = request.headers.get("authorization") or ""
     if auth.lower().startswith("bearer "):
         try:
-            username = jose_jwt.decode(auth[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub")
+            payload = jose_jwt.decode(auth[7:], SECRET_KEY, algorithms=[ALGORITHM])
+            username = payload.get("sub")
         except JWTError:
+            payload = {}
             username = None
         if username:
             try:
@@ -58,6 +61,11 @@ async def advertiser_guard(request: Request, call_next):
             if denial:
                 code, detail = denial
                 return JSONResponse({"detail": detail}, status_code=code)
+            if not session_version_matches(payload, user):
+                return JSONResponse(
+                    {"detail": "Could not validate credentials"},
+                    status_code=401,
+                )
             role = user["role"]
             if role == ADVERTISER_ROLE and not is_path_allowed_for_advertiser(request.url.path):
                 return JSONResponse({"detail": "Доступно только в вашем кабинете"},

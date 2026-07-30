@@ -118,6 +118,9 @@ DB_PASSWORD=$(gen_hex 16)
 MINIO_USER=ds_minio
 MINIO_PASSWORD=$(gen_hex 16)
 SECRET_KEY=$(gen_hex 32)
+AUTH_ACCOUNT_FAILURE_LIMIT=5
+AUTH_IP_FAILURE_LIMIT=20
+AUTH_FAILURE_WINDOW_SECONDS=900
 EOF
     chmod 600 .env
     pass "Создан .env: пароль БД, пароль MinIO и SECRET_KEY сгенерированы"
@@ -125,6 +128,32 @@ fi
 if ! grep -q '^SECRET_KEY=' .env; then
     echo "SECRET_KEY=$(gen_hex 32)" >> .env
     warn "В существующий .env добавлен SECRET_KEY (раньше был небезопасный дефолт)"
+fi
+
+# Старый дефолтный/короткий ключ больше не допускается сервером. Исправляем
+# автоматически и атомарно: это разово завершит старые панели, но не затронет
+# пароли пользователей и данные.
+CURRENT_SECRET=$(sed -n 's/^SECRET_KEY=//p' .env | head -1)
+UNIQUE_SECRET_CHARS=$(printf '%s' "$CURRENT_SECRET" | fold -w1 | sort -u | wc -l | tr -d ' ')
+if [ "${#CURRENT_SECRET}" -lt 32 ] \
+   || [ "$CURRENT_SECRET" = "change-me-super-secret-key" ] \
+   || [ "$CURRENT_SECRET" = "GENERATE_WITH_INSTALL_SERVER" ] \
+   || [ "${UNIQUE_SECRET_CHARS:-0}" -lt 12 ]; then
+    NEW_SECRET=$(gen_hex 32)
+    ENV_TMP=$(mktemp)
+    awk -v secret="$NEW_SECRET" '
+        BEGIN { replaced=0 }
+        /^SECRET_KEY=/ {
+            if (!replaced) print "SECRET_KEY=" secret
+            replaced=1
+            next
+        }
+        { print }
+        END { if (!replaced) print "SECRET_KEY=" secret }
+    ' .env > "$ENV_TMP"
+    mv "$ENV_TMP" .env
+    chmod 600 .env
+    warn "Слабый SECRET_KEY автоматически заменён; ранее выданные JWT завершены"
 fi
 
 # Значения для последующих проверок БД.

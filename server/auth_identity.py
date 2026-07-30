@@ -28,7 +28,8 @@ def fetch_user_identity(db: Session, username: str) -> Optional[dict]:
                    LOWER(COALESCE(role, '')) AS role,
                    COALESCE(is_active, TRUE) AS is_active,
                    COALESCE(is_blocked, FALSE) AS is_blocked,
-                   advertiser_id
+                   advertiser_id,
+                   COALESCE(session_version, 1) AS session_version
             FROM users
             WHERE username = :username
             LIMIT 1

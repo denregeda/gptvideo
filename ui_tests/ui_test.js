@@ -69,7 +69,7 @@ const SAFE_ACTIONS = new Set([
   'ota-refresh',
   'settings-run-selfcheck', 'settings-open-my-password-form',
   'settings-cancel-my-password', 'settings-edit-user',
-  'settings-close-edit-user-modal',
+  'settings-close-edit-user-modal', 'settings-revoke-sessions',
   'ticker-target-all', 'ticker-target-one', 'ticker-pick-color', 'ticker-toggle-screen',
   'dashboard-open-broadcast',
   'adv-open', 'adv-back', 'adv-tab', 'adv-apply-period',
@@ -439,6 +439,24 @@ async function clickNth(page, action, n) {
         else ok('чужие данные и разделы закрыты (403)');
         if (probe.own === 200) ok('свой кабинет открывается');
         else bad(`свой кабинет недоступен (HTTP ${probe.own})`);
+
+        step = 'ручной отзыв сессий рекламодателя';
+        const revoked = await page.evaluate(async (userId) => {
+          const r = await fetch(`/api/users/${userId}/revoke-sessions`, {
+            method: 'POST',
+            headers: {'Authorization': 'Bearer ' + localStorage.getItem('ds_token')},
+          });
+          return r.status;
+        }, created.id);
+        const afterRevoke = await ap.evaluate(async () => {
+          const r = await fetch('/api/advertisers/me', {
+            headers: {'Authorization': 'Bearer ' + localStorage.getItem('ds_token')},
+          });
+          return r.status;
+        });
+        (revoked === 200 && afterRevoke === 401)
+          ? ok('ручное завершение сессий отзывает ранее выданный JWT')
+          : bad(`отзыв сессий не сработал (команда ${revoked}, старый JWT ${afterRevoke})`);
       } catch (e) {
         bad('проверка изоляции не завершилась: ' + e.message.split('\n')[0]);
       } finally {

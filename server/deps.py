@@ -15,6 +15,7 @@ from auth_identity import (
     fetch_user_identity,
     identity_denial,
 )
+from auth_security import session_version_matches, validate_secret_key
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -25,7 +26,7 @@ os.makedirs(MEDIA_PATH, exist_ok=True)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-super-secret-key")
+SECRET_KEY = validate_secret_key(os.getenv("SECRET_KEY"))
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
@@ -45,6 +46,11 @@ def get_db() -> Generator[Session, None, None]:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
+    session_version = to_encode.get("sv", 1)
+    if isinstance(session_version, bool) or not isinstance(session_version, int) \
+            or session_version < 1:
+        raise ValueError("Некорректная версия пользовательской сессии")
+    to_encode["sv"] = session_version
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
@@ -89,6 +95,8 @@ def get_current_admin(
         if code == 401:
             raise credentials_exception
         raise HTTPException(status_code=code, detail=detail)
+    if not session_version_matches(payload, user):
+        raise credentials_exception
     return user
 
 

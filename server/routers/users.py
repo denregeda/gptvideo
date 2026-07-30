@@ -3,7 +3,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from deps import get_db, get_current_admin, require_superadmin, pwd_context
+from deps import (
+    create_access_token,
+    get_db,
+    get_current_admin,
+    pwd_context,
+    require_superadmin,
+)
 
 router = APIRouter()
 
@@ -112,6 +118,15 @@ def _get_target_user(db: Session, user_id: int):
     return user
 
 
+def _close_user_sessions(db: Session, user_id: int) -> None:
+    """Закрыть активность старых JWT в операционном журнале."""
+    db.execute(text("""
+        UPDATE user_sessions
+        SET logout_at = NOW()
+        WHERE user_id = :id AND logout_at IS NULL
+    """), {"id": user_id})
+
+
 @router.patch("/users/{user_id}/role")
 def change_user_role(user_id: int, body: dict = Body(...),
                       admin: dict = Depends(require_superadmin), db: Session = Depends(get_db)):
@@ -126,8 +141,14 @@ def change_user_role(user_id: int, body: dict = Body(...),
     if role == "advertiser":
         name = (body.get("advertiser_name") or "").strip() or target.username
         aid = _ensure_advertiser(db, name, admin["username"])
-    db.execute(text("UPDATE users SET role = :r, advertiser_id = :aid WHERE id = :id"),
+    db.execute(text("""
+        UPDATE users
+        SET role = :r, advertiser_id = :aid,
+            session_version = session_version + 1
+        WHERE id = :id
+    """),
                {"r": role, "aid": aid, "id": user_id})
+    _close_user_sessions(db, user_id)
     db.execute(text("""
         INSERT INTO audit_log (event_type, title, detail, actor)
         VALUES ('user', 'Роль изменена', :detail, :who)
@@ -143,7 +164,12 @@ def toggle_user_block(user_id: int, body: dict = Body(...),
     if target.username == admin["username"]:
         raise HTTPException(status_code=400, detail="Нельзя заблокировать самого себя")
     blocked = bool(body.get("blocked"))
-    db.execute(text("UPDATE users SET is_blocked = :b WHERE id = :id"), {"b": blocked, "id": user_id})
+    db.execute(text("""
+        UPDATE users
+        SET is_blocked = :b, session_version = session_version + 1
+        WHERE id = :id
+    """), {"b": blocked, "id": user_id})
+    _close_user_sessions(db, user_id)
     db.execute(text("""
         INSERT INTO audit_log (event_type, title, detail, actor)
         VALUES ('user', :title, :detail, :who)
@@ -160,11 +186,36 @@ def reset_user_password(user_id: int, body: dict = Body(...),
     new_password = body.get("new_password") or ""
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Пароль — минимум 6 символов")
-    db.execute(text("UPDATE users SET password_hash = :ph WHERE id = :id"),
+    db.execute(text("""
+        UPDATE users
+        SET password_hash = :ph,
+            must_change_password = TRUE,
+            session_version = session_version + 1
+        WHERE id = :id
+    """),
                {"ph": pwd_context.hash(new_password), "id": user_id})
+    _close_user_sessions(db, user_id)
     db.execute(text("""
         INSERT INTO audit_log (event_type, title, detail, actor)
         VALUES ('user', 'Пароль сброшен администратором', :detail, :who)
+    """), {"detail": target.username, "who": admin["username"]})
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/users/{user_id}/revoke-sessions")
+def revoke_user_sessions(user_id: int, admin: dict = Depends(require_superadmin),
+                         db: Session = Depends(get_db)):
+    target = _get_target_user(db, user_id)
+    db.execute(text("""
+        UPDATE users
+        SET session_version = session_version + 1
+        WHERE id = :id
+    """), {"id": user_id})
+    _close_user_sessions(db, user_id)
+    db.execute(text("""
+        INSERT INTO audit_log (event_type, title, detail, actor)
+        VALUES ('security', 'Сессии пользователя завершены', :detail, :who)
     """), {"detail": target.username, "who": admin["username"]})
     db.commit()
     return {"status": "ok"}
@@ -184,8 +235,17 @@ def update_user(user_id: int, body: dict = Body(...),
         raise HTTPException(status_code=400, detail="Пользователь с таким логином уже существует")
 
     db.execute(text("""
-        UPDATE users SET username = :u, first_name = :fn, last_name = :ln WHERE id = :id
-    """), {"u": username, "fn": body.get("first_name"), "ln": body.get("last_name"), "id": user_id})
+        UPDATE users
+        SET username = :u, first_name = :fn, last_name = :ln,
+            session_version = session_version + 1
+        WHERE id = :id
+    """), {"u": username, "fn": body.get("first_name"),
+           "ln": body.get("last_name"), "id": user_id})
+    _close_user_sessions(db, user_id)
+    db.execute(text("""
+        INSERT INTO audit_log (event_type, title, detail, actor)
+        VALUES ('user', 'Данные пользователя изменены', :detail, :who)
+    """), {"detail": username, "who": admin["username"]})
     db.commit()
     return {"status": "ok"}
 
@@ -212,17 +272,34 @@ def change_my_password(body: dict = Body(...), current_admin: dict = Depends(get
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Новый пароль — минимум 6 символов")
 
-    row = db.execute(text("SELECT password_hash FROM users WHERE username = :u"),
+    row = db.execute(text(
+        "SELECT id, password_hash FROM users WHERE username = :u"),
                       {"u": current_admin["username"]}).fetchone()
     if not row or not pwd_context.verify(old_password, row.password_hash):
         raise HTTPException(status_code=400, detail="Неверный текущий пароль")
 
     # Смена пароля снимает флаг обязательной смены (закрывает форс-экран входа).
-    db.execute(text("UPDATE users SET password_hash = :ph, must_change_password = FALSE "
-                    "WHERE username = :u"),
-               {"ph": pwd_context.hash(new_password), "u": current_admin["username"]})
+    updated = db.execute(text("""
+        UPDATE users
+        SET password_hash = :ph,
+            must_change_password = FALSE,
+            session_version = session_version + 1
+        WHERE username = :u
+        RETURNING session_version
+    """), {"ph": pwd_context.hash(new_password),
+           "u": current_admin["username"]}).fetchone()
+    _close_user_sessions(db, row.id)
+    db.execute(text("""
+        INSERT INTO audit_log (event_type, title, detail, actor)
+        VALUES ('security', 'Пароль изменён', :detail, :who)
+    """), {"detail": "Предыдущие сессии отозваны",
+           "who": current_admin["username"]})
     db.commit()
-    return {"status": "ok"}
+    token = create_access_token({
+        "sub": current_admin["username"],
+        "sv": int(updated.session_version),
+    })
+    return {"status": "ok", "access_token": token, "token_type": "bearer"}
 
 
 # ─── Аудит ────────────────────────────────────────────────────────────────────

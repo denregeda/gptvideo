@@ -36,7 +36,8 @@ if not db_url:
 engine = create_engine(db_url)
 with engine.begin() as conn:
     res = conn.execute(
-        text("UPDATE users SET password_hash = :h, must_change_password = true "
+        text("UPDATE users SET password_hash = :h, must_change_password = true, "
+             "session_version = session_version + 1 "
              "WHERE username = 'admin'"),
         {"h": password_hash},
     )
