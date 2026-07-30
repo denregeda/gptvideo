@@ -8,6 +8,10 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+class FileManifestUnavailable(RuntimeError):
+    """Серверный список файлов не получен или не прошёл валидацию."""
+
+
 def md5_file(path: str) -> str:
     h = hashlib.md5()
     with open(path, "rb") as f:
@@ -33,10 +37,16 @@ class Downloader:
         try:
             r = self.session.get(self._url(f"/api/files/list/{screen_id}"), timeout=15)
             r.raise_for_status()
-            return r.json()
+            manifest = r.json()
+            if not isinstance(manifest, list):
+                raise ValueError("ответ должен быть JSON-массивом")
+            if any(not isinstance(item, dict) or not item.get("filename")
+                   for item in manifest):
+                raise ValueError("элемент манифеста не содержит filename")
+            return manifest
         except Exception as e:
             log.error(f"Не удалось получить список файлов: {e}")
-            return []
+            raise FileManifestUnavailable(str(e)) from e
 
     def download_file(self, media_id: int, filename: str, expected_md5: str,
                       expected_size: int) -> bool:
@@ -98,7 +108,11 @@ class Downloader:
         """
         Синхронизировать файлы: скачать нужные, вернуть (downloaded, failed).
         """
-        needed = self.get_file_list(screen_id)
+        try:
+            needed = self.get_file_list(screen_id)
+        except FileManifestUnavailable:
+            log.warning("Синхронизация пропущена: серверный манифест недоступен")
+            return 0, 1
         downloaded = 0
         failed = 0
 
@@ -122,10 +136,18 @@ class Downloader:
 
     def cleanup_unused(self, screen_id: int):
         """Удалить файлы, которые больше не нужны для расписания."""
-        needed = {item["filename"] for item in self.get_file_list(screen_id)}
+        try:
+            needed = {item["filename"] for item in self.get_file_list(screen_id)}
+        except FileManifestUnavailable:
+            log.warning("Очистка пропущена: серверный манифест недоступен")
+            return 0
+
+        removed = 0
         for path in self.media_dir.iterdir():
             # Скрытые файлы (начинающиеся с '.') не трогаем:
             # .schedule_cache.json нужен для офлайн-работы агента.
             if path.is_file() and not path.name.startswith('.') and path.name not in needed:
                 log.info(f"Удаляем ненужный файл: {path.name}")
                 path.unlink()
+                removed += 1
+        return removed
