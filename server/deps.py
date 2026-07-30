@@ -10,6 +10,12 @@ from passlib.context import CryptContext
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from auth_identity import (
+    IdentityStoreUnavailable,
+    fetch_user_identity,
+    identity_denial,
+)
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     os.getenv("POSTGRES_DSN", "postgresql://postgres:postgres@postgres:5432/postgres"),
@@ -47,29 +53,15 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def _fetch_user_by_username(db: Session, username: str):
+    """Совместимая обёртка: ошибка БД всегда превращается в безопасный 503."""
     try:
-        row = db.execute(
-            text(
-                """
-                SELECT username,
-                       COALESCE(role, 'admin') AS role,
-                       COALESCE(is_active, TRUE) AS is_active,
-                       COALESCE(is_blocked, FALSE) AS is_blocked
-                FROM users
-                WHERE username = :username
-                LIMIT 1
-                """
-            ),
-            {"username": username},
-        ).mappings().first()
-        return row
-    except Exception:
-        return {
-            "username": username,
-            "role": "admin",
-            "is_active": True,
-            "is_blocked": False,
-        }
+        return fetch_user_identity(db, username)
+    except IdentityStoreUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service unavailable",
+            headers={"Retry-After": "5"},
+        )
 
 
 def get_current_admin(
@@ -91,26 +83,12 @@ def get_current_admin(
         raise credentials_exception
 
     user = _fetch_user_by_username(db, username)
-    if not user:
-        raise credentials_exception
-
-    if not user.get("is_active", True):
-        raise HTTPException(status_code=403, detail="User is inactive")
-    if user.get("is_blocked", False):
-        raise HTTPException(status_code=403, detail="User is blocked")
-
-    # Привязка к рекламодателю (роль advertiser). Отдельным запросом, а не в
-    # основном SELECT: на базе без миграции 029 колонки ещё нет, и падение
-    # общего запроса увело бы вход в аварийный фолбэк с ролью admin.
-    user = dict(user)
-    user["advertiser_id"] = None
-    try:
-        row = db.execute(text("SELECT advertiser_id FROM users WHERE username = :u"),
-                         {"u": username}).fetchone()
-        if row:
-            user["advertiser_id"] = row.advertiser_id
-    except Exception:
-        pass
+    denial = identity_denial(user)
+    if denial:
+        code, detail = denial
+        if code == 401:
+            raise credentials_exception
+        raise HTTPException(status_code=code, detail=detail)
     return user
 
 
@@ -226,10 +204,7 @@ def verify_any_device_token(
 
 def require_write(current_admin=Depends(get_current_admin)):
     role = str(current_admin.get("role", "")).lower()
-    # moderator — специализированная роль 38-ФЗ: может только одобрять/отклонять
-    # рекламу (см. require_moderator), контент и настройки не меняет.
-    if role in {"viewer", "observer", "auditor", "read_only", "readonly", "moderator",
-                ADVERTISER_ROLE}:
+    if role not in {"admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Write access required")
     return current_admin
 
@@ -237,13 +212,13 @@ def require_write(current_admin=Depends(get_current_admin)):
 def require_moderator(current_admin=Depends(get_current_admin)):
     """Право модерировать рекламу (38-ФЗ): модератор и любой пишущий админ."""
     role = str(current_admin.get("role", "")).lower()
-    if role in {"viewer", "observer", "auditor", "read_only", "readonly", ADVERTISER_ROLE}:
+    if role not in {"moderator", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Требуется право модерации")
     return current_admin
 
 
 def require_superadmin(current_admin: dict = Depends(get_current_admin)):
-    if current_admin.get("role") != "superadmin":
+    if str(current_admin.get("role", "")).lower() != "superadmin":
         raise HTTPException(status_code=403, detail="Доступно только супер-админу")
     return current_admin
 

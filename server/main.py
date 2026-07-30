@@ -4,20 +4,17 @@ FastAPI сервер: управление экранами, расписани�
 
 Точка сборки приложения. Сама логика эндпоинтов разнесена по routers/*
 (один модуль — один логический раздел панели), общие зависимости (БД-сессия,
-JWT, проверка токенов, MEDIA_PATH, pwd_context) — в deps.py.
+JWT, проверка токенов, MEDIA_PATH, pwd_context) — в deps.py, единое чтение
+актуальной роли и блокировки — в auth_identity.py.
 """
-import logging
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt as jose_jwt
-from sqlalchemy import text
 
+from auth_identity import IdentityStoreUnavailable, fetch_user_identity, identity_denial
 from deps import (ALGORITHM, ADVERTISER_ROLE, SECRET_KEY, SessionLocal,
                   is_path_allowed_for_advertiser)
-
-log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Digital Signage API — Вариант Б",
@@ -50,14 +47,18 @@ async def advertiser_guard(request: Request, call_next):
         if username:
             try:
                 with SessionLocal() as db:
-                    row = db.execute(text("SELECT role FROM users WHERE username = :u"),
-                                     {"u": username}).fetchone()
-                role = str(row.role).lower() if row and row.role else ""
-            except Exception as e:
-                # БД недоступна — не пропускаем «на всякий случай»: пусть
-                # запрос дойдёт до эндпоинта, там своя проверка авторизации.
-                log.warning("[guard] не удалось прочитать роль %s: %s", username, e)
-                role = ""
+                    user = fetch_user_identity(db, username)
+            except IdentityStoreUnavailable:
+                return JSONResponse(
+                    {"detail": "Authentication service unavailable"},
+                    status_code=503,
+                    headers={"Retry-After": "5"},
+                )
+            denial = identity_denial(user)
+            if denial:
+                code, detail = denial
+                return JSONResponse({"detail": detail}, status_code=code)
+            role = user["role"]
             if role == ADVERTISER_ROLE and not is_path_allowed_for_advertiser(request.url.path):
                 return JSONResponse({"detail": "Доступно только в вашем кабинете"},
                                     status_code=403)
