@@ -1,0 +1,93 @@
+name: Project CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Fast checks and pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            server/requirements.txt
+            server/requirements-dev.txt
+
+      - name: Create isolated environment
+        run: bash ci/prepare_env.sh
+
+      - name: Install Python dependencies
+        run: pip install -r server/requirements.txt -r server/requirements-dev.txt
+
+      - name: Fast project checks
+        run: bash ci/fast_checks.sh
+
+      - name: Pytest
+        run: |
+          mkdir -p ci_artifacts
+          cd server
+          pytest -q --junitxml=../ci_artifacts/pytest.xml
+
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-report
+          path: ci_artifacts/pytest.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  integration:
+    name: Docker HTTPS, WSS, smoke and UI
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Create isolated environment
+        run: bash ci/prepare_env.sh
+
+      - name: Run full integration suite
+        run: bash ci/run_integration.sh
+
+      - name: Collect failure diagnostics
+        if: failure()
+        run: bash ci/collect_ci_diag.sh
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-diagnostics
+          path: ci_artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop isolated stack
+        if: always()
+        run: bash ci/cleanup.sh

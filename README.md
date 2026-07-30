@@ -1,4 +1,6 @@
 # Digital Signage v16.2 — Модульная версия
+[![Project CI](https://github.com/denregeda/gptvideo/actions/workflows/ci.yml/badge.svg)](https://github.com/denregeda/gptvideo/actions/workflows/ci.yml)
+
 **Дата**: 2026-07-30
 **Версия**: 16.2  
 **Статус**: ✅ Production Ready
@@ -51,6 +53,8 @@ Video_miniPC_v16.2_modular/
 ├── nginx.conf                 # Nginx: HTTPS 443, переходный HTTP, API/WS/медиа
 ├── nginx/includes/            # Модульные HTTPS-маршруты
 ├── tls/                       # CA, сертификаты, проверка и комплект агента
+├── ci/                        # Быстрые/интеграционные проверки и диагностика CI
+├── .github/workflows/ci.yml   # Проверка каждого PR/push + ежедневный прогон
 │
 ├── server/                    # СЕРВЕР (FastAPI + Celery)
 │   ├── main.py                # Точка сборки приложения (только подключение роутеров)
@@ -197,6 +201,8 @@ bash run_tests.sh    # pytest: бизнес-логика, агент, бэкап
 bash smoke_test.sh   # API, HTTP Range, защита бэкапов и полный цикл эфира
 bash ui_test.sh      # браузерный прогон панели: разделы, кнопки, циклы CRUD
 ```
+На GitHub эти уровни запускаются автоматически для каждого PR/push и ежедневно;
+при сбое workflow сохраняет диагностический artifact.
 
 ### На мини ПК
 ```bash
