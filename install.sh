@@ -107,6 +107,7 @@ MISSING=0
 for f in \
     ds_agent.py \
     ds_downloader.py \
+    ds_media_transfer.py \
     ds_player.py \
     ds_sync.py \
     ds_heartbeat.py \
@@ -171,6 +172,7 @@ echo "[3/10] Копирование файлов агента..."
 for f in \
     ds_agent.py \
     ds_downloader.py \
+    ds_media_transfer.py \
     ds_player.py \
     ds_sync.py \
     ds_heartbeat.py \
@@ -462,4 +464,3 @@ echo " Лог установки: $INSTALL_LOG"
 echo " ⏳ Экран должен появиться ОНЛАЙН в панели через ~30 секунд."
 echo "=========================================="
 [ "$FAIL" -eq 0 ] || exit 1
-
