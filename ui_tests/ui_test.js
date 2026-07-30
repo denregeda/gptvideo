@@ -20,11 +20,11 @@
  * так выглядели дефекты, которые ловили руками.
  *
  * Запуск — через ui_test.sh (поднимает контейнер с Chromium).
- * Переменные: DS_URL (по умолч. http://nginx), ADMIN_USER, ADMIN_PASS.
+ * Переменные: DS_URL (по умолч. https://nginx), ADMIN_USER, ADMIN_PASS.
  */
 const puppeteer = require('puppeteer');
 
-const BASE = process.env.DS_URL || 'http://nginx';
+const BASE = process.env.DS_URL || 'https://nginx';
 const USER = process.env.ADMIN_USER || 'admin';
 const PASS = process.env.ADMIN_PASS || 'admin123';
 const STAMP = new Date().toISOString().slice(11, 19).replace(/:/g, '');
@@ -138,7 +138,10 @@ async function clickNth(page, action, n) {
   console.log('════════════════════════════════════════════');
 
   const browser = await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--lang=ru-RU'],
+    // Цепочку и hostname отдельно строго проверяет smoke_test.sh через CA.
+    // Здесь Chromium принимает частный CA, чтобы проверить именно интерфейс.
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--lang=ru-RU',
+      '--ignore-certificate-errors'],
     defaultViewport: { width: 1440, height: 900 },
   });
   const page = await browser.newPage();

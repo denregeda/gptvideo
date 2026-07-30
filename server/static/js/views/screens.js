@@ -688,7 +688,7 @@ async function createScreen(){
     const wrap = document.getElementById('scr-token-wrap');
 
     if(wrap){
-      const cmd = `sudo bash install.sh http://${window.location.hostname} ${token} ${sid} toor`;
+      const cmd = `sudo bash install.sh ${window.location.origin} ${token} ${sid} toor`;
       const cbox = 'user-select:all;word-break:break-all;background:rgba(255,255,255,.05);padding:6px 8px;border-radius:8px;';
       wrap.innerHTML = `<div style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);">
         <div style="font-weight:600;margin-bottom:8px;">Экран создан — данные для установки агента</div>

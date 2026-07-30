@@ -86,15 +86,30 @@ done
 # ($ds_api) при живом resolver 127.0.0.11, поэтому имя перепроверяется на ходу.
 # Проверка остаётся страховкой — на случай старого nginx.conf на сервере или
 # другой причины, по которой api виден изнутри, но не через прокси.
-inside_ok=0;  docker exec ds_api curl -fsS -m 3 http://localhost:8000/health >/dev/null 2>&1 && inside_ok=1
-outside_ok=0; curl -fsS -m 3 http://localhost/health >/dev/null 2>&1 && outside_ok=1
+# Сначала сертификат: при приближении срока автоматически перевыпускаем его
+# под тем же CA, поэтому доверие агентов не ломается.
+if ! bash tls/manage_tls.sh check >/dev/null 2>&1; then
+    log "ПРОБЛЕМА: TLS-сертификат отсутствует, устарел или имеет неверные SAN"
+    if [ "$DRY" = 1 ]; then
+        log "  [dry-run] перевыпустить сертификат и пересоздать nginx"
+    elif bash tls/manage_tls.sh ensure; then
+        act "применить обновлённый сертификат" docker compose up -d --force-recreate nginx
+    else
+        log "  НЕ ПОМОГЛО: автоматическое обновление TLS"
+        PROBLEMS=1
+    fi
+fi
+
+inside_ok=0; docker exec ds_api curl -fsS -m 3 http://localhost:8000/health >/dev/null 2>&1 && inside_ok=1
+outside_ok=0
+curl --cacert tls/generated/ca.crt -fsS -m 3 https://localhost/health >/dev/null 2>&1 && outside_ok=1
 
 if [ "$inside_ok" = 1 ] && [ "$outside_ok" = 0 ]; then
     log "ПРОБЛЕМА: api отвечает изнутри, но через nginx — нет (устаревший IP апстрима → «чёрная панель»)"
     act "перезапустить nginx" docker restart ds_nginx
     if [ "$DRY" = 0 ]; then
         sleep 3
-        curl -fsS -m 3 http://localhost/health >/dev/null 2>&1 \
+        curl --cacert tls/generated/ca.crt -fsS -m 3 https://localhost/health >/dev/null 2>&1 \
             && log "  панель снова доступна" \
             || { log "  всё ещё 502 — смотрите: docker logs --tail=50 ds_nginx (runbook §1)"; PROBLEMS=1; }
     fi

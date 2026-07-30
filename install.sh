@@ -1,7 +1,7 @@
 #!/bin/bash
-# install.sh — установка ds-agent на мини ПК (Astra Linux 1.7 SE)
-# Использование: sudo bash install.sh <URL_СЕРВЕРА> <ТОКЕН> <SCREEN_ID> [ИМЯ_ПОЛЬЗОВАТЕЛЯ]
-# Пример:        sudo bash install.sh http://10.0.119.100 abc123 1 toor
+# install.sh — установка ds-agent на мини ПК (Astra Linux 1.8)
+# Использование: sudo bash install.sh <URL> <ТОКЕН> <SCREEN_ID> [ПОЛЬЗОВАТЕЛЬ] [CA]
+# Пример:        sudo bash install.sh https://10.0.119.100 abc123 1 toor
 set -euo pipefail
 
 # ── Хелперы самодиагностики ──────────────────────────────────────────────────
@@ -16,7 +16,7 @@ die(){  echo; echo "ОСТАНОВ: $1"; [ -n "${2:-}" ] && hint "$2"; exit 1; }
 # 1. АРГУМЕНТЫ
 # ══════════════════════════════════════════════════════════════════════════════
 
-SERVER_URL="${1:?Укажите URL сервера (первый аргумент). Пример: http://10.0.119.100}"
+SERVER_URL="${1:?Укажите URL сервера (первый аргумент). Пример: https://10.0.119.100}"
 TOKEN="${2:?Укажите токен устройства (второй аргумент)}"
 SCREEN_ID="${3:?Укажите ID экрана (третий аргумент, число)}"
 
@@ -24,6 +24,8 @@ SCREEN_ID="${3:?Укажите ID экрана (третий аргумент, �
 # Сам скрипт запускается через sudo (нужен root для apt/systemd/etc), но служба
 # ds-agent и плеер работают от этого пользователя.
 REAL_USER="${4:-toor}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CA_SOURCE="${5:-$SCRIPT_DIR/ca.crt}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. ВАЛИДАЦИЯ ВХОДНЫХ ПАРАМЕТРОВ
@@ -36,13 +38,13 @@ fi
 
 if ! [[ "$SERVER_URL" =~ ^https?:// ]]; then
     echo "ОШИБКА: SERVER_URL должен начинаться с http:// или https://"
-    echo "Пример: http://10.0.119.100"
+    echo "Пример: https://10.0.119.100"
     exit 1
 fi
 
 if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
     echo "ОШИБКА: Нужен реальный пользователь X-сессии, не root."
-    echo "Пример: sudo bash install.sh http://10.0.119.100 ТОКЕН ID toor"
+    echo "Пример: sudo bash install.sh https://10.0.119.100 ТОКЕН ID toor"
     exit 1
 fi
 
@@ -53,7 +55,7 @@ fi
 
 if [ "$EUID" -ne 0 ]; then
     echo "ОШИБКА: скрипт нужно запускать от root:"
-    echo "  sudo bash install.sh http://10.0.119.100 ТОКЕН ID toor"
+    echo "  sudo bash install.sh https://10.0.119.100 ТОКЕН ID toor"
     exit 1
 fi
 
@@ -75,7 +77,6 @@ LOG_DIR="/var/log/ds-agent"
 MEDIA_DIR="/opt/ds-agent/media"
 USER_HOME="$(eval echo "~$REAL_USER")"
 USER_GROUP="$(id -gn "$REAL_USER")"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SCHEME="$(echo "$SERVER_URL" | sed -E 's#^(https?)://.*#\1#')"
 HOST_ONLY="$(echo "$SERVER_URL" | sed -E 's#^https?://##' | sed -E 's#[:/].*$##')"
@@ -87,6 +88,11 @@ if [ -z "${PORT_ONLY:-}" ]; then
     else
         PORT_ONLY="80"
     fi
+fi
+
+if [ "$SCHEME" = "https" ] && [ ! -s "$CA_SOURCE" ]; then
+    die "Для HTTPS не найден публичный CA: $CA_SOURCE" \
+        "Создайте комплект: bash tls/export_agent_bundle.sh /путь/agent_bundle"
 fi
 
 echo "=========================================="
@@ -113,6 +119,7 @@ for f in \
     ds_heartbeat.py \
     ds_cleanup.py \
     ds_ws_client.py \
+    ds_transport.py \
     ds_ota_updater.py \
     requirements.txt \
     ds-agent.service
@@ -138,12 +145,12 @@ echo "[1/10] Установка системных пакетов..."
 apt-get update -q || warn "apt-get update завершился с ошибкой — установка пакетов может не удаться."
 if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
     python3 python3-pip python3-venv \
-    mpv chrony curl; then
+    mpv chrony curl ca-certificates openssl; then
     die "Не удалось установить системные пакеты." "Проверьте apt-источники и доступ к репозиториям (сеть/зеркало Astra)."
 fi
 # Проверяем, что критичные бинарники РЕАЛЬНО встали (особенно плеер mpv —
 # без него не будет воспроизведения).
-for bin in python3 mpv chronyc curl; do
+for bin in python3 mpv chronyc curl openssl; do
     if command -v "$bin" >/dev/null 2>&1; then
         pass "$bin установлен"
     else
@@ -178,6 +185,7 @@ for f in \
     ds_heartbeat.py \
     ds_cleanup.py \
     ds_ws_client.py \
+    ds_transport.py \
     ds_ota_updater.py \
     requirements.txt
 do
@@ -208,8 +216,28 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 echo "[5/10] Проверка доступности сервера..."
 HEALTH_URL="${SCHEME}://${HOST_ONLY}:${PORT_ONLY}/health"
+CURL_TLS=()
+CA_CONFIG=""
+if [ "$SCHEME" = "https" ]; then
+    openssl x509 -in "$CA_SOURCE" -noout >/dev/null 2>&1 \
+        || die "CA-файл повреждён или не является X.509-сертификатом: $CA_SOURCE"
+    openssl x509 -in "$CA_SOURCE" -noout -text 2>/dev/null \
+        | grep -q "CA:TRUE" \
+        || die "Файл не является сертификатом удостоверяющего центра: $CA_SOURCE"
+    openssl x509 -in "$CA_SOURCE" -checkend 2592000 -noout >/dev/null 2>&1 \
+        || die "Срок CA меньше 30 дней: $CA_SOURCE" \
+            "Выполните контролируемую ротацию CA до установки агента."
+    cp "$CA_SOURCE" "$CONFIG_DIR/ca.crt"
+    chown "root:$USER_GROUP" "$CONFIG_DIR/ca.crt"
+    chmod 640 "$CONFIG_DIR/ca.crt"
+    cp "$CA_SOURCE" /usr/local/share/ca-certificates/digital-signage-ca.crt
+    update-ca-certificates >/dev/null
+    CURL_TLS=(--cacert "$CONFIG_DIR/ca.crt")
+    CA_CONFIG="$CONFIG_DIR/ca.crt"
+    pass "локальный CA проверен и добавлен в доверенные"
+fi
 
-if curl -fsS --max-time 10 "$HEALTH_URL" >/dev/null; then
+if curl -fsS --max-time 10 "${CURL_TLS[@]}" "$HEALTH_URL" >/dev/null; then
     echo "Сервер доступен: $HEALTH_URL"
 else
     echo "ПРЕДУПРЕЖДЕНИЕ: сервер пока не ответил на $HEALTH_URL"
@@ -223,9 +251,11 @@ echo "[6/10] Создание конфига..."
 
 cat > "$CONFIG_DIR/config.ini" << INIEOF
 [server]
+scheme = $SCHEME
 host = $HOST_ONLY
 port = $PORT_ONLY
 token = $TOKEN
+ca_file = $CA_CONFIG
 
 [player]
 media_dir = $MEDIA_DIR
@@ -442,7 +472,7 @@ if command -v chronyc >/dev/null 2>&1 && chronyc tracking >/dev/null 2>&1; then
 else
     warn "NTP ещё не синхронизировался — подождите 1–2 минуты (важно для расписания)"
 fi
-if curl -fsS --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
+if curl -fsS --max-time 10 "${CURL_TLS[@]}" "$HEALTH_URL" >/dev/null 2>&1; then
     pass "сервер доступен ($HEALTH_URL)"
 else
     warn "сервер сейчас недоступен — агент подключится, когда сеть/сервер поднимутся"

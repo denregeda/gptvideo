@@ -41,6 +41,15 @@ done
 # ── 2. Здоровье API ──────────────────────────────────────────────────────────
 step "API /health"
 if $DC curl -sf "$API/health" >/dev/null 2>&1; then ok "/health отвечает"; else bad "/health не отвечает"; fi
+if curl --cacert tls/generated/ca.crt -sf https://localhost/health >/dev/null 2>&1; then
+  ok "HTTPS-цепочка и hostname проверены"
+else
+  bad "HTTPS nginx не прошёл проверку CA/hostname"
+fi
+HTTP_PANEL=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null)
+[ "$HTTP_PANEL" = "308" ] \
+  && ok "HTTP-панель перенаправляется на HTTPS" \
+  || bad "HTTP-панель не перенаправлена: HTTP $HTTP_PANEL"
 
 # ── 3. Вход ──────────────────────────────────────────────────────────────────
 step "Аутентификация"
@@ -101,7 +110,17 @@ STAMP=$(date +%s)
 # экран
 req POST "/minipc/register?name=SMOKE_scr_$STAMP"
 SID=$(echo "$BODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+DEVICE_TOKEN=$(echo "$BODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
 [ -n "$SID" ] && ok "экран создан (id=$SID)" || bad "экран не создан"
+if [ -n "$SID" ] && [ -n "$DEVICE_TOKEN" ] && \
+   docker exec \
+     -e DS_SMOKE_SCREEN_ID="$SID" \
+     -e DS_SMOKE_DEVICE_TOKEN="$DEVICE_TOKEN" \
+     ds_api python /app/smoke_wss.py >/dev/null 2>&1; then
+  ok "агентский WSS handshake с проверкой CA"
+else
+  bad "агентский WSS handshake не прошёл"
+fi
 # медиа (генерим тестовый ролик ffmpeg внутри контейнера)
 $DC sh -c "ffmpeg -f lavfi -i testsrc=duration=1:size=160x120:rate=5 -y /tmp/smoke.mp4 -loglevel quiet" 2>/dev/null
 req POST "/media/upload?title=SMOKE_media_$STAMP&category=service" -F "file=@/tmp/smoke.mp4"
@@ -141,8 +160,9 @@ req GET "/moderation/pending";     [ "$HTTP" = "200" ] && ok "модерация
 req GET "/notifications/settings"; [ "$HTTP" = "200" ] && ok "настройки уведомлений" || bad "уведомления: HTTP $HTTP"
 req GET "/system/selfcheck"
 SELF_AUTH_OK=$(echo "$BODY" | python3 -c "import sys,json;c=json.load(sys.stdin).get('checks',[]);print('1' if any(x.get('id')=='auth_security' and x.get('status')=='ok' for x in c) else '')" 2>/dev/null)
-[ "$HTTP" = "200" ] && [ "$SELF_AUTH_OK" = "1" ] \
-  && ok "самодиагностика: защита входа и сессий" \
+SELF_TLS_OK=$(echo "$BODY" | python3 -c "import sys,json;c=json.load(sys.stdin).get('checks',[]);print('1' if any(x.get('id')=='tls' and x.get('status')=='ok' for x in c) else '')" 2>/dev/null)
+[ "$HTTP" = "200" ] && [ "$SELF_AUTH_OK" = "1" ] && [ "$SELF_TLS_OK" = "1" ] \
+  && ok "самодиагностика: TLS, защита входа и сессий" \
   || bad "самодиагностика авторизации: HTTP $HTTP"
 req GET "/media/fillers";          [ "$HTTP" = "200" ] && ok "папка заглушек" || bad "заглушки: HTTP $HTTP"
 req GET "/media/common";           [ "$HTTP" = "200" ] && ok "общая медиатека" || bad "общая медиатека: HTTP $HTTP"

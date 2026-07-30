@@ -4,7 +4,15 @@
 # Использование:  bash collect_diag_agent.sh   → создаёт /tmp/diag_agent_<дата>.txt
 set -uo pipefail
 
-SERVER="${1:-10.0.119.100}"   # можно передать адрес сервера первым аргументом
+CONFIG="/etc/ds-agent/config.ini"
+SERVER="${1:-$(sed -n 's/^host *= *//p' "$CONFIG" 2>/dev/null | head -1)}"
+SCHEME="$(sed -n 's/^scheme *= *//p' "$CONFIG" 2>/dev/null | head -1)"
+PORT="$(sed -n 's/^port *= *//p' "$CONFIG" 2>/dev/null | head -1)"
+CA_FILE="$(sed -n 's/^ca_file *= *//p' "$CONFIG" 2>/dev/null | head -1)"
+SCHEME="${SCHEME:-http}"
+PORT="${PORT:-$([ "$SCHEME" = https ] && echo 443 || echo 80)}"
+CURL_TLS=()
+[ "$SCHEME" = https ] && [ -n "$CA_FILE" ] && CURL_TLS=(--cacert "$CA_FILE")
 OUT="/tmp/diag_agent_$(date +%Y%m%d_%H%M%S).txt"
 {
   echo "================ ДИАГНОСТИКА АГЕНТА $(date '+%Y-%m-%d %H:%M:%S') ================"
@@ -21,7 +29,9 @@ OUT="/tmp/diag_agent_$(date +%Y%m%d_%H%M%S).txt"
   echo; echo "### Watchdog ###"; systemctl show ds-agent -p WatchdogUSec 2>&1
   echo; echo "### Сеть до сервера ($SERVER) ###"
   ping -c2 "$SERVER" 2>&1
-  curl -s -o /dev/null -w 'health -> HTTP %{http_code}\n' "http://$SERVER/health" 2>&1
+  curl "${CURL_TLS[@]}" -s -o /dev/null -w 'health -> HTTP %{http_code}\n' \
+    "$SCHEME://$SERVER:$PORT/health" 2>&1
+  [ "$SCHEME" = https ] && openssl x509 -in "$CA_FILE" -noout -subject -enddate 2>&1
   echo; echo "### Лог установки ###"; tail -n 40 /var/log/ds-agent-install.log 2>&1
 } > "$OUT" 2>&1
 
