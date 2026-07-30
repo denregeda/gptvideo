@@ -72,12 +72,12 @@ async function viewSettings(){
       <div class="sec">Журнал операций</div>
       <div id="audit-log-block" class="muted">Загрузка…</div>
 
-      <div class="sec">Резервное копирование</div>
+      ${canWrite() ? `<div class="sec">Резервное копирование</div>
       <div style="margin-bottom:10px;display:flex;align-items:center;gap:12px;">
         <span class="muted" style="font-size:12px;">Авто-бэкап раз в 24 часа &middot; backup_*.sql.gz</span>
         <button class="btn" data-action="settings-create-backup" style="margin-left:auto;">&#10515; Создать бэкап сейчас</button>
       </div>
-      <div id="backup-list" class="muted" style="font-size:12px;">Загрузка…</div>
+      <div id="backup-list" class="muted" style="font-size:12px;">Загрузка…</div>` : ''}
     </div>`;
 
   if(isSuper()){
@@ -142,7 +142,7 @@ async function viewSettings(){
 
   loadTargetVersions();
   loadAuditLog();
-  loadBackups();
+  if(canWrite()) loadBackups();
   if(isSuper()) loadNotifications();
 }
 
@@ -270,6 +270,12 @@ function initSettingsViewActions(){
 
       case 'settings-create-backup':
         return createBackup();
+
+      case 'settings-download-backup': {
+        const id = Number(el.dataset.backupId);
+        const filename = el.dataset.filename || 'backup.sql.gz';
+        return downloadBackup(id, filename);
+      }
 
       case 'settings-run-selfcheck':
         return runSelfcheck();
@@ -615,7 +621,10 @@ async function loadBackups(){
         <td class="muted" style="font-size:12px;white-space:nowrap;">${b.created_at ? fmtServerTS(b.created_at) : '—'}</td>
         <td class="muted" style="font-size:12px;">${b.size_bytes ? Math.round(b.size_bytes / 1024 / 1024 * 10) / 10 + ' МБ' : '—'}</td>
         <td style="text-align:right;white-space:nowrap;">
-          <a class="btn" style="padding:4px 8px;font-size:12px;text-decoration:none;" href="/api/backups/${b.id}/download" download>&#10515; Скачать</a>
+          <button class="btn" style="padding:4px 8px;font-size:12px;"
+            data-action="settings-download-backup"
+            data-backup-id="${b.id}"
+            data-filename="${esc(b.filename)}">&#10515; Скачать</button>
           <button class="btn danger" style="padding:4px 8px;font-size:12px;"
             data-action="settings-delete-backup"
             data-backup-id="${b.id}"
@@ -635,6 +644,35 @@ async function createBackup(){
     loadBackups();
   }catch(e){
     toast('Ошибка: ' + e.message);
+  }
+}
+
+async function downloadBackup(id, filename){
+  try{
+    const response = await fetch(API + '/backups/' + id + '/download', {
+      headers: TOKEN ? {'Authorization': 'Bearer ' + TOKEN} : {}
+    });
+    if(response.status === 401){
+      TOKEN = null;
+      localStorage.removeItem('ds_token');
+      renderLogin();
+      throw new Error('Сессия истекла');
+    }
+    if(!response.ok){
+      const message = await response.text();
+      throw new Error(message || ('HTTP ' + response.status));
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }catch(e){
+    toast('Не удалось скачать бэкап: ' + e.message);
   }
 }
 
@@ -666,6 +704,7 @@ window.Signage.saveEditUser = saveEditUser;
 window.Signage.delUser = delUser;
 window.Signage.loadBackups = loadBackups;
 window.Signage.createBackup = createBackup;
+window.Signage.downloadBackup = downloadBackup;
 window.Signage.deleteBackup = deleteBackup;
 window.Signage.loadNotifications = loadNotifications;
 window.Signage.saveNotifications = saveNotifications;
