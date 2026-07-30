@@ -26,8 +26,8 @@
 - `server/routers/` — роутеры по доменам: auth, users, screens, media, playlists,
   schedule, campaigns, broadcast, billing, advertiser_office, reports,
   notifications, backups, ticker, system, agent_ota, websockets
-- `server/migrations/` — SQL-миграции с номерами `001`…`031`, применяются
-  автоматически при первом старте Postgres
+- `server/migrations/` — нумерованные SQL-миграции, применяются автоматически
+  при первом старте Postgres и через `migrate.sh` при обновлении
 - `server/tests/` — pytest (billing, campaigns, контроль монитора), запуск через `run_tests.sh`
 - `ui_tests/ui_test.js` — браузерный E2E-прогон панели (puppeteer), запуск через `ui_test.sh`
 - `agent/` — код агента для мини-ПК: `ds_agent.py`, `ds_player.py` (mpv),
@@ -41,6 +41,8 @@
 - `install_server.sh` при первой установке сам генерирует случайные секреты
   и пароль администратора; повторный запуск не перезаписывает существующий `.env`
 - Аутентификация агента — по заголовку `X-Token` (device auth)
+- JWT панели содержит `session_version`; смена пароля/роли, блокировка и ручной
+  отзыв обязаны увеличивать его. Вход защищён Redis rate limit и fail-closed
 - Каждая новая миграция должна быть добавлена в список initdb в `docker-compose.yml`
 - Эфир показывает только контент со статусом `approved` (модерация 38-ФЗ)
 - Ограничение проекта: **никакого AI/ML** в продукте — только детерминированная логика

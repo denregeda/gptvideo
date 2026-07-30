@@ -55,15 +55,21 @@ async function doLogin(){
       // чтобы не раскрывать статус учётки постороннему)
       let detail = '';
       try{ detail = (await res.json()).detail || ''; }catch(_){}
-      err.textContent = (res.status === 403 && detail)
-        ? detail + '. Обратитесь к администратору.'
-        : 'Неверный логин или пароль';
+      if(res.status === 429){
+        const seconds = Number(res.headers.get('Retry-After') || 60);
+        err.textContent = `Слишком много попыток. Повторите через ${Math.ceil(seconds / 60)} мин.`;
+      }else if(res.status === 503){
+        err.textContent = 'Сервис защиты входа временно недоступен';
+      }else{
+        err.textContent = (res.status === 403 && detail)
+          ? detail + '. Обратитесь к администратору.'
+          : 'Неверный логин или пароль';
+      }
       return;
     }
 
     const data = await res.json();
-    TOKEN = data.access_token;
-    localStorage.setItem('ds_token', TOKEN);
+    setAuthToken(data.access_token);
     boot();
   }catch(e){
     err.textContent = 'Ошибка соединения с сервером';
@@ -71,8 +77,7 @@ async function doLogin(){
 }
 
 function logout(){
-  TOKEN = null;
-  localStorage.removeItem('ds_token');
+  clearAuthToken();
   renderLogin();
 }
 
@@ -111,11 +116,12 @@ async function submitForcePassword(){
   if(newp !== new2){ err.textContent = 'Пароли не совпадают'; return; }
 
   try{
-    await api('/me/password', {
+    const data = await api('/me/password', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify({ old_password: oldp, new_password: newp })
     });
+    setAuthToken(data.access_token);
     boot();  // флаг снят на сервере — теперь загрузится сама панель
   }catch(e){
     err.textContent = 'Ошибка: ' + (e.message || 'не удалось сменить пароль');
@@ -128,4 +134,3 @@ window.Signage.logout = logout;
 window.renderForcePassword = renderForcePassword;
 
 initAuthViewActions();
-

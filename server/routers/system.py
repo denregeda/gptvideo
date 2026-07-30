@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from deps import get_db, get_current_admin
+from auth_security import AuthSecurityStoreUnavailable, login_limiter
+from deps import SECRET_KEY, get_db, get_current_admin
 
 router = APIRouter()
 
@@ -100,10 +101,35 @@ def system_selfcheck(db: Session = Depends(get_db), current_admin=Depends(get_cu
         r = _redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"),
                                   socket_timeout=2, socket_connect_timeout=2)
         r.ping()
-        checks.append(_check("redis", "Redis (кеш/очереди)", "ok", "отвечает"))
+        checks.append(_check("redis", "Redis (кеш/защита входа)", "ok", "отвечает"))
     except Exception as e:
-        checks.append(_check("redis", "Redis (кеш/очереди)", "fail", str(e)[:200],
-                             "`docker compose restart redis` (runbook §4); без Redis не работают Celery-задачи (бэкапы, уведомления)"))
+        checks.append(_check("redis", "Redis (кеш/защита входа)", "fail", str(e)[:200],
+                             "`docker compose restart redis` (runbook §4); без Redis вход закрывается безопасно, также не работают Celery-задачи"))
+
+    # --- Защита входа и отзыв сессий
+    try:
+        login_limiter.healthcheck()
+        invalid_versions = db.execute(text("""
+            SELECT COUNT(*) FROM users
+            WHERE session_version IS NULL OR session_version < 1
+        """)).scalar()
+        if invalid_versions:
+            checks.append(_check(
+                "auth_security", "Защита входа и сессий", "fail",
+                f"некорректное поколение сессии у пользователей: {invalid_versions}",
+                "выполните `bash migrate.sh`, затем `docker compose restart api`"))
+        else:
+            checks.append(_check(
+                "auth_security", "Защита входа и сессий", "ok",
+                f"rate limit активен; отзыв JWT активен; ключ {len(SECRET_KEY)} символа"))
+    except AuthSecurityStoreUnavailable as e:
+        checks.append(_check(
+            "auth_security", "Защита входа и сессий", "fail", str(e)[:200],
+            "`docker compose restart redis`; до восстановления вход намеренно закрыт"))
+    except Exception as e:
+        checks.append(_check(
+            "auth_security", "Защита входа и сессий", "fail", str(e)[:200],
+            "выполните `bash migrate.sh` и проверьте миграцию 033"))
 
     # --- Celery-воркер (бэкапы, уведомления MAX, архив журнала показов)
     try:

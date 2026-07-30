@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth_identity import IdentityStoreUnavailable, fetch_user_identity, identity_denial
+from auth_security import session_version_matches
 from deps import engine, get_db, get_current_admin, SECRET_KEY, ALGORITHM
 from ws_auth import agent_token_from_websocket, dashboard_token_from_websocket
 from ws_manager import ws_manager
@@ -17,6 +18,23 @@ from routers.system import compute_server_metrics
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _dashboard_identity_check(db: Session, username: str, payload: dict):
+    """Повторяемая проверка JWT-поколения и роли для живого WS."""
+    try:
+        user = fetch_user_identity(db, username)
+    except IdentityStoreUnavailable:
+        return None, 1013, "Сервис авторизации временно недоступен"
+    denial = identity_denial(user)
+    if denial:
+        code, detail = denial
+        return None, 4401 if code == 401 else 4403, detail
+    if not session_version_matches(payload, user):
+        return None, 4401, "Сессия отозвана"
+    if user["role"] == "advertiser":
+        return None, 4403, "Недоступно для этой роли"
+    return user, None, None
 
 
 # ─── WebSocket: push-команды для агентов ────────────────────────────────────
@@ -103,18 +121,10 @@ async def dashboard_websocket(ws: WebSocket, db: Session = Depends(get_db)):
     # Дашборд отдаёт статусы ВСЕХ экранов сети. Middleware в main.py websocket‑
     # соединения не видит, поэтому роль «рекламодатель» отсекаем здесь же —
     # иначе её JWT открыл бы поток по всей сети в обход белого списка путей.
-    try:
-        user = fetch_user_identity(db, username)
-    except IdentityStoreUnavailable:
-        await ws.close(code=1013, reason="Сервис авторизации временно недоступен")
-        return
-    denial = identity_denial(user)
-    if denial:
-        code, detail = denial
-        await ws.close(code=4401 if code == 401 else 4403, reason=detail)
-        return
-    if user["role"] == "advertiser":
-        await ws.close(code=4403, reason="Недоступно для этой роли")
+    _user, close_code, close_reason = _dashboard_identity_check(
+        db, username, payload_jwt)
+    if close_code:
+        await ws.close(code=close_code, reason=close_reason)
         return
 
     await dashboard_ws_manager.connect(ws, subprotocol=accepted_subprotocol)
@@ -123,6 +133,11 @@ async def dashboard_websocket(ws: WebSocket, db: Session = Depends(get_db)):
             # Пушим актуальные данные каждые 10 секунд
             try:
                 with Session(engine) as db_sess:
+                    _user, close_code, close_reason = _dashboard_identity_check(
+                        db_sess, username, payload_jwt)
+                    if close_code:
+                        await ws.close(code=close_code, reason=close_reason)
+                        return
                     rows = db_sess.execute(text("""
                         SELECT s.id, s.name, s.city, s.status, s.playing_file,
                                s.last_seen, s.disk_free_gb, s.disk_total_gb,

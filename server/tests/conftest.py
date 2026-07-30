@@ -22,6 +22,10 @@ import pytest
 # используется, но задаёт валидный DSN на случай ленивого обращения).
 os.environ.setdefault("MEDIA_PATH", tempfile.mkdtemp(prefix="ds_test_media_"))
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault(
+    "SECRET_KEY",
+    "d4a7b98c21fe5036d4a7b98c21fe5036d4a7b98c21fe5036d4a7b98c21fe5036",
+)
 
 # Каталог server/ (родитель tests/) — чтобы работали `import deps`, `from routers…`
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

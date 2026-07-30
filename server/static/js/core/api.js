@@ -8,6 +8,13 @@ function canWrite(){ return ME.role==='admin' || ME.role==='superadmin'; }
 function isSuper(){ return ME.role==='superadmin'; }
 const ADV_COLORS = {};   // id -> color, для меток
 
+function setAuthToken(token){
+  TOKEN = token || null;
+  if(TOKEN) localStorage.setItem('ds_token', TOKEN);
+  else localStorage.removeItem('ds_token');
+}
+function clearAuthToken(){ setAuthToken(null); }
+
 // ---- HTTP-помощник ----
 async function api(path, opts={}){
   const headers = opts.headers || {};
@@ -21,7 +28,7 @@ async function api(path, opts={}){
     headers['Content-Type'] = 'application/json';
   }
   const res = await fetch(API + path, {...opts, headers});
-  if(res.status === 401){ TOKEN=null; localStorage.removeItem('ds_token'); renderLogin(); throw new Error('unauthorized'); }
+  if(res.status === 401){ clearAuthToken(); renderLogin(); throw new Error('unauthorized'); }
   if(!res.ok){ const t = await res.text(); throw new Error(t || ('HTTP '+res.status)); }
   const ct = res.headers.get('content-type')||'';
   return ct.includes('json') ? res.json() : res.text();
