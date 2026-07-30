@@ -220,11 +220,15 @@ JS-панель не может отрисоваться. Диагноз и ле
    ```bash
    curl -s -i -N --max-time 4 -H "Connection: Upgrade" -H "Upgrade: websocket" \
      -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" \
-     "http://localhost/api/ws/agent/<ID>?token=<ТОКЕН_ЭКРАНА>" | head -3
+     -H "X-Token: <ТОКЕН_ЭКРАНА>" \
+     "http://localhost/api/ws/agent/<ID>" | head -3
    ```
    Ожидается `HTTP/1.1 101 Switching Protocols`. Если `404` — nginx и FastAPI
    разошлись в пути (nginx срезает префикс `/api`, роут должен слушать
-   `/ws/agent/{id}`); если `502` — не поднят `ds_api`.
+   `/ws/agent/{id}`); если `502` — не поднят `ds_api`. Токен в
+   `?token=...` намеренно не поддерживается: секрет не должен попадать в URL
+   и логи. Не вставляйте рабочий токен в диагностическую команду без
+   заголовка `X-Token`.
 3. `docker exec ds_nginx nginx -t` — конфиг должен быть валиден. **Внимание:**
    `nginx.conf` смонтирован как отдельный файл, и правки на хосте контейнер
    не видит до пересоздания: `docker compose up -d --force-recreate nginx`
@@ -235,7 +239,7 @@ JS-панель не может отрисоваться. Диагноз и ле
    с жёстким `proxy_pass http://api:8000` имя резолвится один раз при старте
    и после смены IP контейнера прокси бьёт в пустоту. Разовое лечение —
    `docker compose restart nginx` (то же делает `selfheal.sh`).
-4. Пока WS не поднят, система остаётся работоспособной — команды идут по
+5. Пока WS не поднят, система остаётся работоспособной — команды идут по
    polling, теряется только мгновенность.
 
 ---
