@@ -67,6 +67,15 @@ $DC sh -c "ffmpeg -f lavfi -i testsrc=duration=1:size=160x120:rate=5 -y /tmp/smo
 req POST "/media/upload?title=SMOKE_media_$STAMP&category=service" -F "file=@/tmp/smoke.mp4"
 MID=$(echo "$BODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 [ -n "$MID" ] && ok "медиа загружено (id=$MID)" || bad "загрузка медиа: HTTP $HTTP"
+# реальная докачка: endpoint обязан вернуть только запрошенные 16 байт и HTTP 206
+if [ -n "$MID" ]; then
+  RANGE_RESULT=$($DC curl -s -o /tmp/smoke-range.bin -w '%{http_code} %{size_download}' \
+    -H "Authorization: Bearer $TOKEN" -H "Range: bytes=0-15" \
+    "$API/files/download/$MID" 2>/dev/null)
+  [ "$RANGE_RESULT" = "206 16" ] \
+    && ok "докачка медиа по Range (HTTP 206, 16 байт)" \
+    || bad "докачка медиа повреждена: $RANGE_RESULT"
+fi
 # плейлист
 req POST "/playlists?name=SMOKE_pl_$STAMP"
 PID=$(echo "$BODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
@@ -149,7 +158,7 @@ step "Уборка"
 [ -n "${PID:-}" ] && req DELETE "/playlists/$PID" && ok "плейлист удалён"
 [ -n "${MID:-}" ] && req DELETE "/media/$MID"      && ok "медиа удалено"
 [ -n "${SID:-}" ] && req DELETE "/minipc/$SID"     && ok "экран удалён"
-$DC rm -f /tmp/smoke.mp4 2>/dev/null
+$DC rm -f /tmp/smoke.mp4 /tmp/smoke-range.bin 2>/dev/null
 
 # ── Итог ─────────────────────────────────────────────────────────────────────
 echo

@@ -47,7 +47,7 @@ async function viewOta(){
     }
 
     // ── Форма отправки обновления ─────────────────────────────────────────
-    const allowedFiles = ['ds_agent.py','ds_player.py','ds_sync.py','ds_heartbeat.py','ds_downloader.py','ds_cleanup.py','ds_ws_client.py'];
+    const allowedFiles = ['ds_agent.py','ds_player.py','ds_sync.py','ds_heartbeat.py','ds_downloader.py','ds_media_transfer.py','ds_cleanup.py','ds_ws_client.py'];
     const fileCheckboxes = allowedFiles.map(fn=>{
       const exists = files.find(f=>f.name===fn);
       return `<label style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;margin-bottom:5px;font-size:12px;${exists?'':'opacity:0.4'}">
@@ -112,7 +112,7 @@ async function otaUpload(){
   const res = document.getElementById('ota-upload-result');
   if(!inp||!inp.files.length){ toast('Выберите файл'); return; }
   const file = inp.files[0];
-  const allowed = ['ds_agent.py','ds_player.py','ds_sync.py','ds_heartbeat.py','ds_downloader.py','ds_cleanup.py','ds_ws_client.py'];
+  const allowed = ['ds_agent.py','ds_player.py','ds_sync.py','ds_heartbeat.py','ds_downloader.py','ds_media_transfer.py','ds_cleanup.py','ds_ws_client.py'];
   if(!allowed.includes(file.name)){ toast('Недопустимый файл: '+file.name); return; }
   res.textContent = 'Загрузка…';
   try{

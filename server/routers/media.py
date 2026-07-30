@@ -7,12 +7,13 @@ import uuid
 from typing import Optional
 
 import aiofiles
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from deps import engine, get_db, get_current_admin, require_write, require_moderator, verify_device_token, MEDIA_PATH
+from file_delivery import ranged_file
 
 router = APIRouter()
 
@@ -793,13 +794,12 @@ def files_for_screen(screen_id: int, db: Session = Depends(get_db),
 
 
 @router.get("/files/download/{media_id}")
-def download_file(media_id: int, db: Session = Depends(get_db)):
-    """Отдать файл мини ПК для скачивания (Range поддерживается через nginx)"""
+def download_file(media_id: int, request: Request, db: Session = Depends(get_db)):
+    """Отдать файл мини-ПК с поддержкой докачки по HTTP Range."""
     row = db.execute(text("SELECT filename FROM media WHERE id = :id"), {"id": media_id}).fetchone()
     if not row:
         raise HTTPException(404, "Файл не найден")
     filepath = os.path.join(MEDIA_PATH, row.filename)
     if not os.path.exists(filepath):
         raise HTTPException(404, "Файл отсутствует на диске")
-    return FileResponse(filepath, media_type="application/octet-stream",
-                        filename=row.filename, headers={"Accept-Ranges": "bytes"})
+    return ranged_file(filepath, request, row.filename)
