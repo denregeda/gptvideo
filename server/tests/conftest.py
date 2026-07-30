@@ -16,15 +16,23 @@ from types import SimpleNamespace
 import pytest
 
 # --- Импорт product-кода без побочных эффектов на реальную среду -------------
-# deps.py при импорте делает os.makedirs(MEDIA_PATH) и create_engine(DATABASE_URL).
-# create_engine ленивый (без БД не подключается), а MEDIA_PATH уводим во временную
-# папку, чтобы не зависеть от /data/media. DATABASE_URL — sqlite in-memory (не
-# используется, но задаёт валидный DSN на случай ленивого обращения).
-os.environ.setdefault("MEDIA_PATH", tempfile.mkdtemp(prefix="ds_test_media_"))
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault(
-    "SECRET_KEY",
-    "d4a7b98c21fe5036d4a7b98c21fe5036d4a7b98c21fe5036d4a7b98c21fe5036",
+# Роутеры при импорте создают рабочие каталоги в /data, а deps.py ещё и
+# инициализирует create_engine(DATABASE_URL). Все каталоги уводим под единый
+# временный корень: тесты работают и в контейнере, и от непривилегированного
+# пользователя, не затрагивая рабочие медиа, бэкапы, диагностику и OTA.
+_test_data_root = tempfile.mkdtemp(prefix="ds_test_data_")
+os.environ["MEDIA_PATH"] = os.path.join(_test_data_root, "media")
+os.environ["BACKUP_DIR"] = os.path.join(_test_data_root, "backups")
+os.environ["AGENT_UPDATE_PATH"] = os.path.join(
+    _test_data_root,
+    "agent_updates",
+)
+# create_engine ленивый (без БД не подключается). SQLite задаёт валидный DSN на
+# случай ленивого обращения.
+os.environ["DATABASE_URL"] = "sqlite://"
+os.environ["SECRET_KEY"] = (
+    "d4a7b98c21fe5036d4a7b98c21fe5036"
+    "d4a7b98c21fe5036d4a7b98c21fe5036"
 )
 
 # Каталог server/ (родитель tests/) — чтобы работали `import deps`, `from routers…`
