@@ -21,7 +21,8 @@ class Cleanup:
                       for item in self.downloader.get_file_list(self.screen_id)}
         except Exception as e:
             log.error(f"Не удалось получить список нужных файлов: {e}")
-            return
+            log.warning("Локальный медиакеш сохранён для офлайн-воспроизведения")
+            return 0
 
         removed = 0
         for path in self.media_dir.iterdir():
@@ -34,3 +35,4 @@ class Cleanup:
 
         if removed:
             log.info(f"Очистка завершена: удалено {removed} файлов")
+        return removed
