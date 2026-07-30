@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from auth_identity import IdentityStoreUnavailable, fetch_user_identity, identity_denial
 from deps import engine, get_db, get_current_admin, SECRET_KEY, ALGORITHM
 from ws_manager import ws_manager
 from dashboard_ws import dashboard_ws_manager
@@ -99,9 +100,17 @@ async def dashboard_websocket(ws: WebSocket, db: Session = Depends(get_db)):
     # Дашборд отдаёт статусы ВСЕХ экранов сети. Middleware в main.py websocket‑
     # соединения не видит, поэтому роль «рекламодатель» отсекаем здесь же —
     # иначе её JWT открыл бы поток по всей сети в обход белого списка путей.
-    role = db.execute(text("SELECT role FROM users WHERE username = :u"),
-                      {"u": username}).scalar()
-    if str(role or "").lower() == "advertiser":
+    try:
+        user = fetch_user_identity(db, username)
+    except IdentityStoreUnavailable:
+        await ws.close(code=1013, reason="Сервис авторизации временно недоступен")
+        return
+    denial = identity_denial(user)
+    if denial:
+        code, detail = denial
+        await ws.close(code=4401 if code == 401 else 4403, reason=detail)
+        return
+    if user["role"] == "advertiser":
         await ws.close(code=4403, reason="Недоступно для этой роли")
         return
 
