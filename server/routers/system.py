@@ -64,6 +64,23 @@ def system_selfcheck(db: Session = Depends(get_db), current_admin=Depends(get_cu
 
     checks = []
 
+    # --- TLS nginx: проверяем цепочку частного CA, hostname и срок.
+    try:
+        from tls_health import check_tls_endpoint
+        st, detail = check_tls_endpoint()
+        checks.append(_check(
+            "tls", "HTTPS/WSS", st, detail,
+            None if st == "ok" else
+            "на хосте выполните `bash tls/manage_tls.sh ensure`, затем "
+            "`docker compose up -d --force-recreate nginx`",
+        ))
+    except Exception as e:
+        checks.append(_check(
+            "tls", "HTTPS/WSS", "fail", str(e)[:200],
+            "проверьте `bash tls/manage_tls.sh check` и логи "
+            "`docker compose logs --tail=50 nginx`",
+        ))
+
     # --- PostgreSQL (если БД лежит, до этой строки запрос не дойдёт — но
     # замер времени отклика полезен и для «живой» БД)
     try:

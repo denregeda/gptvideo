@@ -13,7 +13,7 @@
 #
 # Использование:   bash ui_test.sh
 # Переменные:      ADMIN_USER (по умолч. admin), ADMIN_PASS (admin123),
-#                  DS_URL (по умолч. http://nginx — адрес панели ИЗНУТРИ
+#                  DS_URL (по умолч. https://nginx — адрес панели ИЗНУТРИ
 #                  docker-сети стека).
 #
 # Chromium не ставится на сервер: прогон идёт в одноразовом контейнере
@@ -26,7 +26,7 @@ cd "$(dirname "$0")"
 
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin123}"
-DS_URL="${DS_URL:-http://nginx}"
+DS_URL="${DS_URL:-https://nginx}"
 IMAGE="${UI_TEST_IMAGE:-ghcr.io/puppeteer/puppeteer:23.11.1}"
 
 command -v docker >/dev/null 2>&1 || { echo "ОШИБКА: docker не найден."; exit 1; }

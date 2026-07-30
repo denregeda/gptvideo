@@ -43,10 +43,10 @@ if not Path(CONFIG_PATH).exists():
     sys.exit(1)
 cfg.read(CONFIG_PATH)
 
-SERVER_HOST = cfg["server"]["host"]
-SERVER_PORT = cfg["server"].get("port", "80")
 TOKEN       = cfg["server"]["token"]
-SERVER_URL  = "http://{}:{}".format(SERVER_HOST, SERVER_PORT)
+sys.path.insert(0, str(Path(__file__).parent))
+from ds_transport import configure_transport
+SERVER_URL, CA_FILE = configure_transport(cfg["server"])
 
 MEDIA_DIR   = cfg["player"]["media_dir"]
 # Плеер — mpv (управляется через IPC-сокет). Путь к бинарнику берём из конфига;
@@ -80,7 +80,6 @@ root_log.addHandler(ch)
 log = logging.getLogger("ds_agent")
 
 # ── Импортируем модули ────────────────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).parent))
 from ds_downloader import Downloader
 from ds_player    import VLCPlayer
 from ds_sync      import SyncHandler
@@ -315,6 +314,7 @@ def main():
         on_command=_on_ws_command,
         on_connect=_on_ws_connect,
         on_disconnect=_on_ws_disconnect,
+        ca_file=CA_FILE,
     )
     ws_client.start()
 

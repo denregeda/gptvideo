@@ -49,6 +49,10 @@ docker compose version >/dev/null 2>&1 \
     || die "Docker Compose v2 не найден (нужна команда 'docker compose')." "Обновите Docker до версии с Compose v2."
 pass "Docker Compose v2 найден"
 
+command -v openssl >/dev/null 2>&1 \
+    || die "OpenSSL не установлен." "Установите: sudo apt-get install -y openssl"
+pass "OpenSSL найден"
+
 for f in docker-compose.yml server/migrations/001_init_schema.sql; do
     [ -f "$f" ] || die "Не найден обязательный файл: $f" "Запускайте скрипт из каталога проекта, скопированного полностью."
 done
@@ -130,6 +134,18 @@ if ! grep -q '^SECRET_KEY=' .env; then
     warn "В существующий .env добавлен SECRET_KEY (раньше был небезопасный дефолт)"
 fi
 
+add_env_default() {
+    local key="$1" value="$2"
+    if ! grep -q "^${key}=" .env; then
+        printf '%s=%s\n' "$key" "$value" >> .env
+        warn "В существующий .env добавлен $key=$value"
+    fi
+}
+add_env_default TLS_SERVER_NAME display.local
+add_env_default TLS_EXTRA_SANS ""
+add_env_default TLS_RENEW_DAYS 30
+add_env_default TLS_LEGACY_HTTP true
+
 # Старый дефолтный/короткий ключ больше не допускается сервером. Исправляем
 # автоматически и атомарно: это разово завершит старые панели, но не затронет
 # пароли пользователей и данные.
@@ -162,6 +178,13 @@ set -a; . ./.env 2>/dev/null || true; set +a
 
 [ "${1:-}" = "--env-only" ] && { echo; echo "Готово (--env-only): стек не запускался."; exit 0; }
 
+echo; echo "▶ TLS-сертификаты"
+if bash tls/manage_tls.sh ensure; then
+    pass "локальный CA и TLS-сертификат готовы"
+else
+    die "Не удалось подготовить TLS." "Проверьте вывод tls/manage_tls.sh и значения TLS_* в .env."
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. Сборка и запуск (с диагностикой ошибки)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -172,8 +195,8 @@ RC=${PIPESTATUS[0]}
 if [ "$RC" -ne 0 ]; then
     echo
     echo "Запуск не удался. Вероятная причина:"
-    if grep -qiE 'port is already allocated|address already in use|bind.*:80' "$BUILD_LOG"; then
-        hint "Порт 80 занят другим процессом. Найдите его: 'sudo lsof -i :80' (или 'ss -ltnp sport = :80') и остановите."
+    if grep -qiE 'port is already allocated|address already in use|bind.*:(80|443)' "$BUILD_LOG"; then
+        hint "Порт 80 или 443 занят. Найдите процесс: 'sudo ss -ltnp | grep -E \":(80|443) \"' и остановите его."
     elif grep -qiE 'no space left' "$BUILD_LOG"; then
         hint "Кончилось место на диске. Освободите: docker image prune -f; docker builder prune -f"
     elif grep -qiE 'permission denied|got permission denied.*docker.sock' "$BUILD_LOG"; then
@@ -187,6 +210,17 @@ if [ "$RC" -ne 0 ]; then
 fi
 rm -f "$BUILD_LOG"
 pass "docker compose up отработал"
+
+# Bind-mount сертификата меняется без пересоздания контейнера, но nginx держит
+# сертификат в памяти. Всегда проверяем конфиг и делаем graceful reload:
+# активные запросы/загрузки не обрываются.
+if docker compose exec -T nginx nginx -t >/dev/null 2>&1 \
+   && docker compose exec -T nginx nginx -s reload >/dev/null 2>&1; then
+    pass "nginx применил актуальный сертификат и HTTP-политику"
+else
+    bad "nginx не применил TLS-конфигурацию"
+    hint "Проверьте: docker compose logs --tail=50 nginx"
+fi
 
 # ── Применение миграций БД (идемпотентно, безопасно при обновлении) ───────────
 # На пустой БД миграции уже накатил initdb; на существующей — migrate.sh
@@ -258,10 +292,16 @@ else
     bad "PostgreSQL недоступна"; hint "Логи: docker compose logs postgres"
 fi
 
-# 3.4 Панель отдаётся через nginx (порт 80 на хосте)
-code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null || echo 000)
-[ "$code" = 200 ] && pass "панель отдаётся nginx (HTTP 200)" \
-                   || { bad "панель не отвечает (HTTP $code)"; hint "Логи: docker compose logs nginx"; }
+# 3.4 TLS nginx: цепочка доверия, hostname и /health проверяются без -k.
+code=$(curl --cacert tls/generated/ca.crt -s -o /dev/null -w '%{http_code}' \
+    https://localhost/ 2>/dev/null || echo 000)
+[ "$code" = 200 ] && pass "панель отдаётся по проверенному HTTPS (HTTP 200)" \
+                   || { bad "HTTPS-панель не отвечает (HTTP $code)"; hint "Логи: docker compose logs nginx"; }
+if bash tls/manage_tls.sh check >/dev/null 2>&1; then
+    pass "сертификат валиден и не требует продления"
+else
+    bad "TLS-сертификат не прошёл проверку срока/цепочки/SAN"
+fi
 
 # ── Итог ──────────────────────────────────────────────────────────────────────
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -269,7 +309,7 @@ echo
 echo "════════════════════════════════════════════════════════════"
 if [ "$FAIL" -eq 0 ]; then
     echo "  ✅ Установка завершена. Проверок пройдено: $PASS, предупреждений: $WARN."
-    echo "  Панель:  http://${IP:-<IP-сервера>}/"
+    echo "  Панель:  https://${IP:-<IP-сервера>}/"
     if [ -n "$ADMIN_PW" ]; then
         echo "  Вход:    admin / $ADMIN_PW"
         echo "  ⚠ Пароль показан ОДИН раз — запишите его. При первом входе панель"

@@ -20,7 +20,7 @@ AGENT_UPDATE_PATH = os.getenv("AGENT_UPDATE_PATH", "/data/agent_updates")
 os.makedirs(AGENT_UPDATE_PATH, exist_ok=True)
 ALLOWED_AGENT_FILES = {"ds_agent.py", "ds_player.py", "ds_sync.py", "ds_heartbeat.py",
                        "ds_downloader.py", "ds_media_transfer.py", "ds_cleanup.py",
-                       "ds_ws_client.py"}
+                       "ds_ws_client.py", "ds_transport.py"}
 
 
 # ─── Обновление агентов (OTA) ────────────────────────────────────────────────

@@ -17,8 +17,10 @@ OUT="diag_server_$(date +%Y%m%d_%H%M%S).txt"
   echo; echo "### Ресурсы (снимок) ###"; docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' 2>&1
   echo; echo "### Диск ###"; df -h 2>&1
   echo; echo "### Доступность панели/API ###"
-  curl -s -o /dev/null -w 'GET /        -> HTTP %{http_code}\n' http://localhost/ 2>&1
-  curl -s -o /dev/null -w 'GET /health  -> HTTP %{http_code}\n' http://localhost/health 2>&1
+  curl --cacert tls/generated/ca.crt -s -o /dev/null -w 'HTTPS /        -> HTTP %{http_code}\n' https://localhost/ 2>&1
+  curl --cacert tls/generated/ca.crt -s -o /dev/null -w 'HTTPS /health  -> HTTP %{http_code}\n' https://localhost/health 2>&1
+  curl -s -o /dev/null -w 'HTTP redirect -> HTTP %{http_code}\n' http://localhost/ 2>&1
+  echo; echo "### TLS ###"; bash tls/manage_tls.sh check 2>&1
   echo; echo "### Миграции (кол-во применённых) ###"
   docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM schema_migrations" 2>&1
   echo; echo "### Логи API (хвост) ###";      docker compose logs --tail=80 api 2>&1

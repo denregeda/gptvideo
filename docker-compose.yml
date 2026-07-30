@@ -94,6 +94,7 @@ services:
       # Код агента — только для регрессионных тестов (pytest гоняем внутри
       # ds_api). Сервер этот каталог не читает; в проде монтировать не нужно.
       - ./agent:/agent:ro
+      - ./tls/generated:/etc/ds-tls:ro
       - media_data:/data/media
       - backup_data:/data/backups
       - agent_updates_data:/data/agent_updates
@@ -147,11 +148,14 @@ services:
     container_name: ds_nginx
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/includes:/etc/nginx/includes:ro
+      - ./tls/generated:/etc/nginx/tls:ro
       - media_data:/data/media:ro
       - nginx_logs:/var/log/nginx
       - ./server/static:/usr/share/nginx/panel:ro
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
       api:
         condition: service_healthy

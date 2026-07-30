@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import ssl
 import threading
 import time
 
@@ -26,7 +27,7 @@ class WSClient(threading.Thread):
 
     def __init__(self, server_url: str, screen_id: int, token: str,
                  on_command: callable, on_connect: callable = None,
-                 on_disconnect: callable = None):
+                 on_disconnect: callable = None, ca_file: str | None = None):
         super().__init__(daemon=True, name="ws-client")
         self.server_url  = server_url.rstrip("/")
         self.screen_id   = screen_id
@@ -34,6 +35,7 @@ class WSClient(threading.Thread):
         self.on_command  = on_command     # вызывается при {"type":"new_command"}
         self.on_connect  = on_connect     # вызывается при успешном подключении
         self.on_disconnect = on_disconnect # вызывается при разрыве
+        self.ca_file = ca_file
 
         self._stop_event = threading.Event()
         self._connected  = False
@@ -76,6 +78,14 @@ class WSClient(threading.Thread):
 
         path = f"/api/ws/agent/{self.screen_id}"
         return host, port, path
+
+    def _open_socket(self, host: str, port: int) -> socket.socket:
+        """Открыть TCP или проверенный TLS-сокет в зависимости от URL."""
+        raw = socket.create_connection((host, port), timeout=10)
+        if not self.server_url.startswith("https://"):
+            return raw
+        context = ssl.create_default_context(cafile=self.ca_file)
+        return context.wrap_socket(raw, server_hostname=host)
 
     def _handshake(self, sock: socket.socket, host: str, path: str) -> bool:
         """HTTP Upgrade → WebSocket. Возвращает True если успешно."""
@@ -165,11 +175,10 @@ class WSClient(threading.Thread):
         log.info("[WS] Клиент запущен (server={}, screen_id={})".format(
             self.server_url, self.screen_id))
         while not self._stop_event.is_set():
+            sock = None
             try:
                 host, port, path = self._parse_url()
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(10)
-                sock.connect((host, port))
+                sock = self._open_socket(host, port)
                 if not self._handshake(sock, host, path):
                     log.warning("[WS] Handshake не удался — сервер не поддерживает WS или неверный токен")
                     sock.close()
@@ -215,7 +224,8 @@ class WSClient(threading.Thread):
             finally:
                 self._connected = False
                 try:
-                    sock.close()
+                    if sock:
+                        sock.close()
                 except Exception:
                     pass
                 if self.on_disconnect:
