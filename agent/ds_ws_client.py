@@ -50,7 +50,7 @@ class WSClient(threading.Thread):
     # ── WebSocket реализация (RFC 6455) ──────────────────────────────────────
 
     def _parse_url(self):
-        """Разобрать SERVER_URL в (host, port, path_with_query)."""
+        """Разобрать SERVER_URL в (host, port, path) без секретов."""
         url = self.server_url
         if url.startswith("http://"):
             host_part = url[7:]
@@ -74,16 +74,20 @@ class WSClient(threading.Thread):
             host = host_port
             port = default_port
 
-        path = f"/api/ws/agent/{self.screen_id}?token={self.token}"
+        path = f"/api/ws/agent/{self.screen_id}"
         return host, port, path
 
     def _handshake(self, sock: socket.socket, host: str, path: str) -> bool:
         """HTTP Upgrade → WebSocket. Возвращает True если успешно."""
         import base64, os
+        if (not self.token or len(self.token) > 4096
+                or "\r" in self.token or "\n" in self.token):
+            raise ValueError("Некорректный токен устройства")
         key = base64.b64encode(os.urandom(16)).decode()
         request = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: {host}\r\n"
+            f"X-Token: {self.token}\r\n"
             f"Upgrade: websocket\r\n"
             f"Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"

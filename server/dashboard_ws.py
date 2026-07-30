@@ -1,6 +1,6 @@
 class DummyDashboardWSManager:
-    async def connect(self, websocket, client_id=None):
-        await websocket.accept()
+    async def connect(self, websocket, client_id=None, subprotocol=None):
+        await websocket.accept(subprotocol=subprotocol)
 
     async def disconnect(self, websocket, client_id=None):
         return None

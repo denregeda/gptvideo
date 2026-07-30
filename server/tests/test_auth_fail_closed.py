@@ -219,7 +219,8 @@ def test_dashboard_websocket_fails_closed(db, close_code):
 
     with pytest.raises(WebSocketDisconnect) as error:
         with TestClient(app).websocket_connect(
-                f"/ws/dashboard?token={_token()}"):
+                "/ws/dashboard",
+                subprotocols=["ds-auth", _token()]):
             pass
 
     assert error.value.code == close_code

@@ -90,10 +90,13 @@
     setWsIndicator('connecting');
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws/dashboard?token=${encodeURIComponent(wsToken)}`;
+    const wsUrl = `${protocol}//${location.host}/ws/dashboard`;
 
     try {
-      ws = new WebSocket(wsUrl);
+      // WebSocket API браузера не позволяет задать Authorization. Передаём
+      // JWT вторым subprotocol: он остаётся в заголовке handshake и не
+      // попадает в URL/access log. Сервер выбирает только публичный ds-auth.
+      ws = new WebSocket(wsUrl, ['ds-auth', wsToken]);
     } catch (e) {
       setWsIndicator('disconnected');
       wsReconnectTimer = setTimeout(connectDashboardWS, 5000);
@@ -101,6 +104,10 @@
     }
 
     ws.onopen = () => {
+      if (ws.protocol !== 'ds-auth') {
+        ws.close(1002, 'Не подтверждён протокол авторизации');
+        return;
+      }
       setWsIndicator('connected');
       console.log('[WS Dashboard] Подключён');
     };

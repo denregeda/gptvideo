@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from auth_identity import IdentityStoreUnavailable, fetch_user_identity, identity_denial
 from deps import engine, get_db, get_current_admin, SECRET_KEY, ALGORITHM
+from ws_auth import agent_token_from_websocket, dashboard_token_from_websocket
 from ws_manager import ws_manager
 from dashboard_ws import dashboard_ws_manager
 from routers.system import compute_server_metrics
@@ -25,7 +26,7 @@ router = APIRouter()
 async def agent_websocket(screen_id: int, ws: WebSocket, db: Session = Depends(get_db)):
     """
     WebSocket-соединение для агента мини ПК.
-    Аутентификация: X-Token передаётся как query-параметр ?token=...
+    Аутентификация: токен устройства передаётся только заголовком X-Token.
     После подключения сервер пушит {"type":"new_command"} при появлении команд.
     Агент должен ответить {"type":"ping"} на {"type":"ping"} (keepalive).
 
@@ -37,8 +38,7 @@ async def agent_websocket(screen_id: int, ws: WebSocket, db: Session = Depends(g
       • /api/ws/agent/{id} — прямое обращение к uvicorn на :8000 (dev, тесты,
         обращения изнутри docker-сети мимо nginx).
     """
-    # Аутентификация через query-параметр token
-    token = ws.query_params.get("token", "")
+    token = agent_token_from_websocket(ws)
     row = db.execute(
         text("SELECT id, name FROM screens WHERE token = :t AND id = :sid"),
         {"t": token, "sid": screen_id}
@@ -82,11 +82,14 @@ def ws_status(admin: dict = Depends(get_current_admin)):
 async def dashboard_websocket(ws: WebSocket, db: Session = Depends(get_db)):
     """
     WebSocket для администраторов: push-обновления статусов экранов.
-    Авторизация: JWT через query-параметр ?token=...
+    Авторизация: JWT передаётся вторым WebSocket subprotocol после `ds-auth`.
     Пушит {"type":"screens_update", "screens": [...]} каждые 10 секунд.
     """
     from jose import JWTError, jwt as jose_jwt
-    token = ws.query_params.get("token", "")
+    token, accepted_subprotocol = dashboard_token_from_websocket(ws)
+    if not token:
+        await ws.close(code=4401, reason="Токен должен быть в WebSocket subprotocol")
+        return
     try:
         payload_jwt = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload_jwt.get("sub")
@@ -114,7 +117,7 @@ async def dashboard_websocket(ws: WebSocket, db: Session = Depends(get_db)):
         await ws.close(code=4403, reason="Недоступно для этой роли")
         return
 
-    await dashboard_ws_manager.connect(ws)
+    await dashboard_ws_manager.connect(ws, subprotocol=accepted_subprotocol)
     try:
         while True:
             # Пушим актуальные данные каждые 10 секунд
